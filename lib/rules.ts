@@ -2,6 +2,17 @@ import { hits } from './score'
 import { isDigits, type Err, type GuessRow, type No, type Room, type Seat, type View } from './types'
 
 export const ROOM_TTL_MS = 6 * 60 * 60 * 1000
+export const MATCH_SECONDS = 45
+
+export function tickRoom(room: Room, now: number): Room {
+  if (room.status !== 'playing' || !room.turn || room.deadline == null || now < room.deadline) return room
+  return {
+    ...room,
+    turn: room.turn === '1' ? '2' : '1',
+    deadline: now + room.turnSeconds * 1000,
+    updatedAt: now,
+  }
+}
 
 export function isExpired(room: Room, now: number) {
   return now - room.updatedAt > ROOM_TTL_MS
@@ -45,6 +56,7 @@ export function lockSecret(room: Room, playerId: string, secret: string, now: nu
   if (next.p1Secret && next.p2Secret) {
     next.status = 'playing'
     next.turn = '1'
+    next.deadline = now + next.turnSeconds * 1000
   }
   return { ok: true, room: next }
 }
@@ -74,6 +86,7 @@ export function submitGuess(
       status: won ? 'done' : 'playing',
       turn: won ? null : seat === '1' ? '2' : '1',
       winner: won ? seat : null,
+      deadline: won ? null : now + room.turnSeconds * 1000,
     },
   }
 }
@@ -91,6 +104,7 @@ export function rematchRoom(room: Room, playerId: string, now: number): { ok: tr
       p2Secret: null,
       turn: null,
       winner: null,
+      deadline: null,
       updatedAt: now,
     },
   }
@@ -103,6 +117,7 @@ export function present(room: Room, guesses: GuessRow[], playerId: string, now: 
   const yours = seat === '1' ? room.p1Secret : room.p2Secret
   const opps = seat === '1' ? room.p2Secret : room.p1Secret
   const done = room.status === 'done'
+  const opp = [...guesses].reverse().find((row) => row.seat !== seat)
   return {
     ok: true,
     view: {
@@ -115,6 +130,9 @@ export function present(room: Room, guesses: GuessRow[], playerId: string, now: 
       oppLocked: Boolean(opps),
       yourSecret: yours,
       guesses: guesses.filter((row) => row.seat === seat).map((row) => ({ guess: row.guess, hits: row.hits })),
+      oppGuess: opp ? { guess: opp.guess, hits: opp.hits } : null,
+      turnSeconds: room.turnSeconds,
+      leftMs: room.status === 'playing' && room.deadline != null ? Math.max(0, room.deadline - now) : null,
       winner: room.winner == null ? null : room.winner === seat ? 'you' : 'opp',
       oppSecret: done ? opps : null,
       rev: room.updatedAt,

@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { CODE_ROWS, normalizeCode } from '@/lib/code'
-import type { DigitLength, View } from '@/lib/types'
+import type { DigitLength, TurnSeconds, View } from '@/lib/types'
 import { ApiError, api } from './api'
 import { Brick, BrickButton } from './bricks'
-import { BackIcon, ShareIcon } from './icons'
+import { BackIcon, ClockIcon, ShareIcon } from './icons'
 import { NoteGrid, type Mark } from './notes'
 import { Numpad } from './numpad'
 import { getPlayerId } from './player'
@@ -23,6 +23,7 @@ const WORDS: Record<string, string> = {
 }
 
 const LENGTHS: DigitLength[] = [3, 4, 5, 6]
+const TIMES: TurnSeconds[] = [30, 45, 60, 90]
 const LENGTH_TONE = ['', '', '', 'd0 dark', 'd3 dark', 'd4 dark', 'd5 light']
 
 type Phase = { name: 'home' } | { name: 'join'; code: string } | { name: 'queue' } | { name: 'room'; code: string }
@@ -55,6 +56,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const [phase, setPhase] = useState<Phase>({ name: 'home' })
   const [boot, setBoot] = useState(Boolean(initialRoom))
   const [length, setLength] = useState<DigitLength>(4)
+  const [seconds, setSeconds] = useState<TurnSeconds>(45)
   const [view, setView] = useState<View | null>(null)
   const [entry, setEntry] = useState('')
   const [mode, setMode] = useState<Mode>('play')
@@ -66,6 +68,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const [notesFor, setNotesFor] = useState('')
   const [fresh, setFresh] = useState(false)
   const seenGuesses = useRef(-1)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const prevStatus = useRef<View['status'] | null>(null)
   const queueCancel = useRef(false)
   const submittedCode = useRef('')
@@ -151,6 +154,9 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         const next = await api<View>(`/api/rooms/${roomCode}`)
         if (stop) return
         take(next)
+        const hurry = next.leftMs != null && next.leftMs < 2000
+        if (!stop) timer = window.setTimeout(tick, document.hidden ? 4000 : hurry ? 400 : 1200)
+        return
       } catch (error) {
         if (stop) return
         if (error instanceof ApiError && (error.code === 'expired' || error.code === 'not_found' || error.code === 'forbidden')) {
@@ -331,7 +337,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     try {
       const created = await api<{ code: string }>('/api/rooms', {
         method: 'POST',
-        body: JSON.stringify({ digitLength: length }),
+        body: JSON.stringify({ digitLength: length, turnSeconds: seconds }),
       })
       await enter(created.code)
     } catch (error) {
@@ -406,8 +412,18 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     })
   }
 
+  useEffect(() => {
+    if (view?.status === 'playing' && view.turn !== view.seat) setEntry('')
+  }, [view?.status, view?.turn, view?.seat])
+
   const screen =
     boot ? 'boot' : phase.name === 'home' ? 'home' : phase.name === 'join' ? 'join' : phase.name === 'queue' ? 'queue' : view?.status === 'waiting' ? 'wait' : view?.status === 'done' ? 'done' : 'live'
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [view?.guesses.length, view?.code, screen])
   const showLever = screen === 'live' || screen === 'done'
   const showHold = Boolean(view && view.status !== 'waiting' && screen !== 'boot' && screen !== 'home' && screen !== 'join' && screen !== 'queue')
 
@@ -422,7 +438,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
           </h1>
         ) : (
           <div className="lamps">
-            <Lamp seat="1" view={view} queue={screen === 'queue'} />
+            <Lamp seat="1" view={view} queue={screen === 'queue'} yours={screen === 'queue' || view?.seat === '1'} />
             {showLever ? (
               <div className="lever">
                 <BrickButton className="lever-btn" hollow={mode !== 'play'} aria-pressed={mode === 'play'} onClick={() => setMode('play')}>
@@ -435,7 +451,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
             ) : (
               <span />
             )}
-            <Lamp seat="2" view={view} queue={false} />
+            <Lamp seat="2" view={view} queue={false} yours={view?.seat === '2'} />
           </div>
         )}
       </header>
@@ -460,6 +476,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
           ) : null}
           {offline && !flash ? <p className="flash">断</p> : null}
           {screen === 'home' ? (
+            <div className="home-pick">
             <div className="lengths">
               {LENGTHS.map((item) => (
                 <BrickButton
@@ -472,6 +489,23 @@ export function Game({ initialRoom }: { initialRoom: string }) {
                   {item}
                 </BrickButton>
               ))}
+            </div>
+            <div className="times">
+              <ClockIcon />
+              <div className="time-row">
+              {TIMES.map((item) => (
+                <BrickButton
+                  key={item}
+                  hollow={item !== seconds}
+                  className={item === seconds ? 'd2 dark' : ''}
+                  aria-pressed={item === seconds}
+                  onClick={() => setSeconds(item)}
+                >
+                  {item}
+                </BrickButton>
+              ))}
+              </div>
+            </div>
             </div>
           ) : null}
           {screen === 'wait' && view ? (
@@ -511,8 +545,10 @@ export function Game({ initialRoom }: { initialRoom: string }) {
           ) : null}
           {view && (screen === 'live' || screen === 'done') ? (
             <>
+              <OppLine view={view} />
               <Target view={view} />
-              <div className="well-scroll">
+              <div className="well-scroll" ref={scrollRef}>
+                <div className="scroll-pad" />
                 <History className="history-main" tagged guesses={view.guesses} fresh={fresh} />
                 {(view.status === 'locking' && !view.youLocked) || (view.status === 'playing' && view.turn === view.seat) ? (
                   <LiveRow value={entry} length={view.digitLength} />
@@ -604,7 +640,17 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   )
 }
 
-function Lamp({ seat, view, queue }: { seat: '1' | '2'; view: View | null; queue: boolean }) {
+function Lamp({
+  seat,
+  view,
+  queue,
+  yours,
+}: {
+  seat: '1' | '2'
+  view: View | null
+  queue: boolean
+  yours: boolean
+}) {
   const occupied = queue ? seat === '1' : Boolean(view && (seat === '1' || view.status !== 'waiting'))
   const turn = Boolean(view && view.status === 'playing' && view.turn === seat)
   const won = Boolean(
@@ -612,8 +658,45 @@ function Lamp({ seat, view, queue }: { seat: '1' | '2'; view: View | null; queue
       view.status === 'done' &&
       ((view.winner === 'you' && view.seat === seat) || (view.winner === 'opp' && view.seat !== seat)),
   )
-  const cls = occupied ? `here ${turn || won || (queue && seat === '1') ? 'on' : ''}` : 'hollow'
-  return <span className={`brick lamp p${seat} ${cls}`}>{seat === '1' ? '1P' : '2P'}</span>
+  const cls = occupied ? `here ${yours ? 'mine' : ''} ${turn || won || (queue && seat === '1') ? 'on' : ''}` : 'hollow'
+  return (
+    <span className={`brick lamp p${seat} ${cls}`} aria-current={yours ? 'true' : undefined}>
+      {seat === '1' ? '1P' : '2P'}
+    </span>
+  )
+}
+
+function Clock({ leftMs }: { leftMs: number | null }) {
+  const [left, setLeft] = useState(leftMs ?? 0)
+  useEffect(() => {
+    if (leftMs == null) return
+    setLeft(leftMs)
+    const start = performance.now()
+    const id = window.setInterval(() => setLeft(Math.max(0, leftMs - (performance.now() - start))), 200)
+    return () => window.clearInterval(id)
+  }, [leftMs])
+  if (leftMs == null) return null
+  const secs = Math.max(0, Math.ceil(left / 1000))
+  return <span className={`brick clock ${secs <= 10 ? 'd5 light' : ''}`}>{secs}</span>
+}
+
+function OppLine({ view }: { view: View }) {
+  const opp = view.seat === '1' ? '2' : '1'
+  const guess = view.oppGuess
+  return (
+    <div className="opp-line">
+      <span className={`brick seat-pip p${opp} here`}>{opp === '1' ? '1P' : '2P'}</span>
+      <div className="row with-hit" style={{ ['--n' as string]: view.digitLength }}>
+        {Array.from({ length: view.digitLength }, (_, index) =>
+          guess ? <Brick key={index} digit={guess.guess[index]} /> : <span key={index} className="brick hollow" />,
+        )}
+        <span className="brick hit" data-opp-hits={guess ? guess.hits : undefined}>
+          {guess ? guess.hits : ''}
+        </span>
+      </div>
+      {view.status === 'playing' ? <Clock leftMs={view.leftMs} /> : null}
+    </div>
+  )
 }
 
 function Target({ view }: { view: View }) {

@@ -23,6 +23,19 @@ export function DropIcon() {
   )
 }
 
+export function ClockIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="icon" aria-hidden="true">
+      <rect x="2" y="2" width="12" height="2" />
+      <rect x="2" y="12" width="12" height="2" />
+      <rect x="2" y="4" width="2" height="8" />
+      <rect x="12" y="4" width="2" height="8" />
+      <rect x="7" y="5" width="2" height="4" />
+      <rect x="7" y="7" width="4" height="2" />
+    </svg>
+  )
+}
+
 export function ShareIcon() {
   return (
     <svg viewBox="0 0 16 16" className="icon" aria-hidden="true">

@@ -1,8 +1,9 @@
 import { Pool, neonConfig } from '@neondatabase/serverless'
 import { randomCode } from './code'
-import { joinRoom, lockSecret, present, rematchRoom, submitGuess } from './rules'
+import { joinRoom, lockSecret, MATCH_SECONDS, present, rematchRoom, submitGuess, tickRoom } from './rules'
 import { schemaStatements } from './schema'
 import {
+  parseSeconds,
   type DigitLength,
   type GuessRow,
   type No,
@@ -49,6 +50,8 @@ function mapRoom(row: Record<string, unknown>): Room {
     p1Secret: row.p1_secret == null ? null : String(row.p1_secret),
     p2Secret: row.p2_secret == null ? null : String(row.p2_secret),
     winner: asSeat(row.winner),
+    turnSeconds: parseSeconds(row.turn_seconds) ?? 45,
+    deadline: row.deadline == null ? null : asTime(row.deadline),
     updatedAt: asTime(row.updated_at),
     createdAt: asTime(row.created_at),
   }
@@ -138,7 +141,9 @@ export function createNeonStore(url: string): Store {
         p1_secret = $7,
         p2_secret = $8,
         winner = $9,
-        updated_at = $10
+        turn_seconds = $10,
+        deadline = $11,
+        updated_at = $12
       WHERE code = $1`,
       [
         room.code,
@@ -150,20 +155,22 @@ export function createNeonStore(url: string): Store {
         room.p1Secret,
         room.p2Secret,
         room.winner,
+        room.turnSeconds,
+        room.deadline == null ? null : new Date(room.deadline),
         new Date(room.updatedAt),
       ],
     )
   }
 
-  function shown(room: Room, guesses: GuessRow[], playerId: string): { ok: true; view: View } | No {
-    return present(room, guesses, playerId, room.updatedAt)
+  function shown(room: Room, guesses: GuessRow[], playerId: string, now: number): { ok: true; view: View } | No {
+    return present(room, guesses, playerId, now)
   }
 
   async function insertRoom(q: Querier, room: Room) {
     await q.query(
       `INSERT INTO rooms
-        (code, digit_length, status, p1, p2, turn, p1_secret, p2_secret, winner, updated_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        (code, digit_length, status, p1, p2, turn, p1_secret, p2_secret, winner, turn_seconds, deadline, updated_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
         room.code,
         room.digitLength,
@@ -174,6 +181,8 @@ export function createNeonStore(url: string): Store {
         room.p1Secret,
         room.p2Secret,
         room.winner,
+        room.turnSeconds,
+        room.deadline == null ? null : new Date(room.deadline),
         new Date(room.updatedAt),
         new Date(room.createdAt),
       ],
@@ -190,8 +199,10 @@ export function createNeonStore(url: string): Store {
   }
 
   return {
-    async createRoom(playerId, digitLength) {
+    async createRoom(playerId, digitLength, turnSeconds = 45) {
       return tx(async (q) => {
+        const seconds = parseSeconds(turnSeconds)
+        if (!seconds) return { ok: false as const, error: 'format' as const }
         const at = Date.now()
         await q.query(`DELETE FROM queue WHERE player_id = $1 AND room_code IS NULL`, [playerId])
         const code = await freshCode(q)
@@ -205,6 +216,8 @@ export function createNeonStore(url: string): Store {
           p1Secret: null,
           p2Secret: null,
           winner: null,
+          turnSeconds: seconds,
+          deadline: null,
           updatedAt: at,
           createdAt: at,
         })
@@ -219,15 +232,18 @@ export function createNeonStore(url: string): Store {
         const joined = joinRoom(opened.room, playerId, Date.now())
         if (!joined.ok) return joined
         await saveRoom(q, joined.room)
-        return shown(joined.room, opened.guesses, playerId)
+        return shown(joined.room, opened.guesses, playerId, Date.now())
       })
     },
 
     async get(code, playerId) {
       return tx(async (q) => {
-        const opened = await load(q, code, false)
+        const opened = await load(q, code, true)
         if (!opened.ok) return opened
-        return shown(opened.room, opened.guesses, playerId)
+        const now = Date.now()
+        const ticked = tickRoom(opened.room, now)
+        if (ticked !== opened.room) await saveRoom(q, ticked)
+        return shown(ticked, opened.guesses, playerId, now)
       })
     },
 
@@ -238,7 +254,7 @@ export function createNeonStore(url: string): Store {
         const locked = lockSecret(opened.room, playerId, secret, Date.now())
         if (!locked.ok) return locked
         await saveRoom(q, locked.room)
-        return shown(locked.room, opened.guesses, playerId)
+        return shown(locked.room, opened.guesses, playerId, Date.now())
       })
     },
 
@@ -246,7 +262,10 @@ export function createNeonStore(url: string): Store {
       return tx(async (q) => {
         const opened = await load(q, code, true)
         if (!opened.ok) return opened
-        const played = submitGuess(opened.room, playerId, guess, Date.now())
+        const now = Date.now()
+        const room = tickRoom(opened.room, now)
+        if (room !== opened.room) await saveRoom(q, room)
+        const played = submitGuess(room, playerId, guess, now)
         if (!played.ok) return played
         await saveRoom(q, played.room)
         await q.query(`INSERT INTO guesses (room_code, seat, guess, hits, created_at) VALUES ($1,$2,$3,$4,$5)`, [
@@ -256,7 +275,7 @@ export function createNeonStore(url: string): Store {
           played.row.hits,
           new Date(played.row.createdAt),
         ])
-        return shown(played.room, [...opened.guesses, played.row], playerId)
+        return shown(played.room, [...opened.guesses, played.row], playerId, now)
       })
     },
 
@@ -268,7 +287,7 @@ export function createNeonStore(url: string): Store {
         if (!next.ok) return next
         await saveRoom(q, next.room)
         await q.query(`DELETE FROM guesses WHERE room_code = $1`, [code])
-        return shown(next.room, [], playerId)
+        return shown(next.room, [], playerId, Date.now())
       })
     },
 
@@ -308,6 +327,8 @@ export function createNeonStore(url: string): Store {
             p1Secret: null,
             p2Secret: null,
             winner: null,
+            turnSeconds: MATCH_SECONDS,
+            deadline: null,
             updatedAt: at,
             createdAt: at,
           })

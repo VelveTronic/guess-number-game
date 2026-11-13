@@ -34,6 +34,7 @@ describe('memory rooms', () => {
     if (!probe.ok) return
     assert.deepEqual(probe.view.guesses, [{ guess: '4444', hits: 1 }])
     assert.equal(probe.view.oppSecret, null)
+    assert.equal(probe.view.oppGuess, null)
     assert.equal(JSON.stringify(probe.view).includes('7541'), false)
 
     const other = await store.get(created.code, 'p2')
@@ -41,6 +42,8 @@ describe('memory rooms', () => {
     if (!other.ok) return
     assert.equal(JSON.stringify(other.view).includes('1234'), false)
     assert.equal(other.view.yourSecret, '7541')
+    assert.deepEqual(other.view.oppGuess, { guess: '4444', hits: 1 })
+    assert.equal(other.view.guesses.length, 0)
 
     const miss = await store.guess(created.code, 'p2', '0000')
     assert.equal(miss.ok, true)
@@ -99,5 +102,30 @@ describe('memory rooms', () => {
     if (!room.ok) return
     assert.equal(room.view.status, 'locking')
     assert.equal(room.view.digitLength, 4)
+    assert.equal(room.view.turnSeconds, 45)
+  })
+
+  it('passes the turn when the clock runs out', async () => {
+    let now = 5_000
+    const store = createMemoryStore(() => now)
+    const created = await store.createRoom('p1', 4, 30)
+    assert.equal(created.ok, true)
+    if (!created.ok) return
+    assert.equal((await store.join(created.code, 'p2')).ok, true)
+    assert.equal((await store.lock(created.code, 'p1', '1234')).ok, true)
+    const started = await store.lock(created.code, 'p2', '7541')
+    assert.equal(started.ok, true)
+    if (!started.ok) return
+    assert.equal(started.view.turn, '1')
+    assert.equal(started.view.leftMs, 30_000)
+
+    now += 30_001
+    const passed = await store.get(created.code, 'p2')
+    assert.equal(passed.ok, true)
+    if (!passed.ok) return
+    assert.equal(passed.view.turn, '2')
+    assert.equal(passed.view.seat, '2')
+    const late = await store.guess(created.code, 'p1', '4444')
+    assert.equal(late.ok, false)
   })
 })

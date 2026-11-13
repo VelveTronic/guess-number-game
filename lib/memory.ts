@@ -1,12 +1,14 @@
 import { randomCode } from './code'
-import { isExpired, joinRoom, lockSecret, present, rematchRoom, submitGuess } from './rules'
+import { isExpired, joinRoom, lockSecret, MATCH_SECONDS, present, rematchRoom, submitGuess, tickRoom } from './rules'
 import {
   parseLength,
+  parseSeconds,
   type DigitLength,
   type GuessRow,
   type No,
   type Room,
   type Seat,
+  type TurnSeconds,
   type View,
 } from './types'
 
@@ -18,7 +20,11 @@ type QueueEntry = {
 }
 
 export type Store = {
-  createRoom(playerId: string, digitLength: DigitLength): Promise<{ ok: true; code: string; seat: Seat } | No>
+  createRoom(
+    playerId: string,
+    digitLength: DigitLength,
+    turnSeconds?: TurnSeconds,
+  ): Promise<{ ok: true; code: string; seat: Seat } | No>
   join(code: string, playerId: string): Promise<{ ok: true; view: View } | No>
   get(code: string, playerId: string): Promise<{ ok: true; view: View } | No>
   lock(code: string, playerId: string, secret: string): Promise<{ ok: true; view: View } | No>
@@ -74,11 +80,19 @@ export function createMemoryStore(now: () => number = Date.now): Store {
     return present(room, guesses.get(room.code) ?? [], playerId, at)
   }
 
+  function settle(room: Room, at: number) {
+    const next = tickRoom(room, at)
+    if (next !== room) rooms.set(room.code, next)
+    return next
+  }
+
   return {
-    createRoom(playerId, digitLength) {
+    createRoom(playerId, digitLength, turnSeconds = 45) {
       return serial(() => {
         const length = parseLength(digitLength)
+        const seconds = parseSeconds(turnSeconds)
         if (!length) return { ok: false, error: 'length' }
+        if (!seconds) return { ok: false, error: 'format' }
         const at = now()
         const mine = queue.get(playerId)
         if (mine && !mine.code) queue.delete(playerId)
@@ -93,6 +107,8 @@ export function createMemoryStore(now: () => number = Date.now): Store {
           p1Secret: null,
           p2Secret: null,
           winner: null,
+          turnSeconds: seconds,
+          deadline: null,
           updatedAt: at,
           createdAt: at,
         }
@@ -119,7 +135,7 @@ export function createMemoryStore(now: () => number = Date.now): Store {
         const at = now()
         const opened = openRoom(code, at)
         if (!opened.ok) return opened
-        return viewOf(opened.room, playerId, at)
+        return viewOf(settle(opened.room, at), playerId, at)
       })
     },
 
@@ -140,7 +156,7 @@ export function createMemoryStore(now: () => number = Date.now): Store {
         const at = now()
         const opened = openRoom(code, at)
         if (!opened.ok) return opened
-        const played = submitGuess(opened.room, playerId, guess, at)
+        const played = submitGuess(settle(opened.room, at), playerId, guess, at)
         if (!played.ok) return played
         rooms.set(code, played.room)
         guesses.set(code, [...(guesses.get(code) ?? []), played.row])
@@ -192,6 +208,8 @@ export function createMemoryStore(now: () => number = Date.now): Store {
             p1Secret: null,
             p2Secret: null,
             winner: null,
+            turnSeconds: MATCH_SECONDS,
+            deadline: null,
             updatedAt: at,
             createdAt: at,
           }
