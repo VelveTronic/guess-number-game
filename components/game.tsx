@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { CODE_ROWS, normalizeCode } from '@/lib/code'
+import { outcomeOf } from '@/lib/outcome'
 import type { DigitLength, TurnSeconds, View } from '@/lib/types'
 import { ApiError, api } from './api'
 import { Brick, BrickButton } from './bricks'
@@ -9,6 +10,7 @@ import { BackIcon, ClockIcon, ShareIcon } from './icons'
 import { NoteGrid, type Mark } from './notes'
 import { Numpad } from './numpad'
 import { getPlayerId } from './player'
+import { Verdict } from './verdict'
 
 const WORDS: Record<string, string> = {
   not_found: '没有',
@@ -28,6 +30,17 @@ const LENGTH_TONE = ['', '', '', 'd0 dark', 'd3 dark', 'd4 dark', 'd5 light']
 
 type Phase = { name: 'home' } | { name: 'join'; code: string } | { name: 'queue' } | { name: 'room'; code: string }
 type Mode = 'play' | 'notes'
+type Screen = 'boot' | 'home' | 'join' | 'queue' | 'wait' | 'done' | 'live'
+
+function screenOf(boot: boolean, phase: Phase['name'], status: View['status'] | undefined): Screen {
+  if (boot) return 'boot'
+  if (phase === 'home') return 'home'
+  if (phase === 'join') return 'join'
+  if (phase === 'queue') return 'queue'
+  if (status === 'waiting') return 'wait'
+  if (status === 'done') return 'done'
+  return 'live'
+}
 
 function wordOf(error: unknown) {
   if (!(error instanceof ApiError) || error.status >= 500 || error.status === 0) return '断'
@@ -73,6 +86,9 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const queueCancel = useRef(false)
   const submittedCode = useRef('')
   const flashTimer = useRef(0)
+  const onKey = useRef<(event: KeyboardEvent) => void>(() => {})
+
+  useEffect(() => () => window.clearTimeout(flashTimer.current), [])
 
   const roomCode = phase.name === 'room' ? phase.code : ''
 
@@ -244,6 +260,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
 
   useEffect(() => {
     const status = view?.status ?? null
+    if (prevStatus.current && prevStatus.current !== 'done' && status === 'done') setMode('play')
     if (prevStatus.current === 'done' && status === 'locking' && roomCode) {
       localStorage.removeItem(`guess-notes:${roomCode}:${getPlayerId()}`)
       setMarks({})
@@ -290,36 +307,38 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     }
   }
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (phase.name === 'join') {
-        if (event.key === 'Backspace') {
-          event.preventDefault()
-          setPhase((current) => (current.name === 'join' ? { name: 'join', code: current.code.slice(0, -1) } : current))
-        }
-        const ch = event.key.toUpperCase()
-        if (ch.length === 1 && CODE_ROWS.join('').includes(ch)) {
-          event.preventDefault()
-          typeCode(ch)
-        }
-        return
+  onKey.current = (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (phase.name === 'join') {
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        setPhase((current) => (current.name === 'join' ? { name: 'join', code: current.code.slice(0, -1) } : current))
       }
-      if (!padOn) return
-      if (event.key >= '0' && event.key <= '9') {
+      const ch = event.key.toUpperCase()
+      if (ch.length === 1 && CODE_ROWS.join('').includes(ch)) {
         event.preventDefault()
-        pushDigit(event.key)
-      } else if (event.key === 'Backspace') {
-        event.preventDefault()
-        backspace()
-      } else if (event.key === 'Enter') {
-        event.preventDefault()
-        void commit()
+        typeCode(ch)
       }
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+    if (!padOn) return
+    if (event.key >= '0' && event.key <= '9') {
+      event.preventDefault()
+      pushDigit(event.key)
+    } else if (event.key === 'Backspace') {
+      event.preventDefault()
+      backspace()
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      void commit()
+    }
+  }
+
+  useEffect(() => {
+    const listen = (event: KeyboardEvent) => onKey.current(event)
+    window.addEventListener('keydown', listen)
+    return () => window.removeEventListener('keydown', listen)
+  }, [])
 
   function home() {
     queueCancel.current = true
@@ -416,8 +435,8 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     if (view?.status === 'playing' && view.turn !== view.seat) setEntry('')
   }, [view?.status, view?.turn, view?.seat])
 
-  const screen =
-    boot ? 'boot' : phase.name === 'home' ? 'home' : phase.name === 'join' ? 'join' : phase.name === 'queue' ? 'queue' : view?.status === 'waiting' ? 'wait' : view?.status === 'done' ? 'done' : 'live'
+  const screen = screenOf(boot, phase.name, view?.status)
+  const outcome = screen === 'done' && view ? outcomeOf(view.status, view.winner) : null
 
   useEffect(() => {
     const el = scrollRef.current
@@ -428,7 +447,11 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const showHold = Boolean(view && view.status !== 'waiting' && screen !== 'boot' && screen !== 'home' && screen !== 'join' && screen !== 'queue')
 
   return (
-    <main className={`cabinet is-${screen} ${mode === 'notes' ? 'is-notes' : 'is-play'} ${offline ? 'is-offline' : ''}`} data-screen={screen}>
+    <main
+      className={`cabinet is-${screen} ${mode === 'notes' ? 'is-notes' : 'is-play'} ${offline ? 'is-offline' : ''} ${outcome ? `is-${outcome}` : ''}`}
+      data-screen={screen}
+      data-outcome={outcome ?? 'none'}
+    >
       <header className="top">
         {screen === 'home' || screen === 'boot' ? (
           <h1 className="marquee">
@@ -468,6 +491,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         ) : null}
 
         <section className="well" aria-busy={boot || busy}>
+          {outcome ? <Verdict outcome={outcome} /> : null}
           <div key={`${screen}-${mode}`} className="well-face">
           {flash ? (
             <p className="flash" role="alert">
@@ -683,10 +707,11 @@ function Clock({ leftMs }: { leftMs: number | null }) {
 function OppLine({ view }: { view: View }) {
   const opp = view.seat === '1' ? '2' : '1'
   const guess = view.oppGuess
+  const solved = Boolean(guess && view.status === 'done' && guess.hits === view.digitLength)
   return (
     <div className="opp-line">
       <span className={`brick seat-pip p${opp} here`}>{opp === '1' ? '1P' : '2P'}</span>
-      <div className="row with-hit" style={{ ['--n' as string]: view.digitLength }}>
+      <div className={`row with-hit ${solved ? 'solved' : ''}`} style={{ ['--n' as string]: view.digitLength }}>
         {Array.from({ length: view.digitLength }, (_, index) =>
           guess ? <Brick key={index} digit={guess.guess[index]} /> : <span key={index} className="brick hollow" />,
         )}

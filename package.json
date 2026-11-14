@@ -5,7 +5,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx --test lib/score.test.ts lib/memory.test.ts",
+    "test": "tsx --test lib/score.test.ts lib/memory.test.ts lib/outcome.test.ts",
     "migrate": "node --env-file=.env.local scripts/migrate.mjs"
   },
   "dependencies": {

@@ -161,6 +161,7 @@ button:disabled { cursor: default; }
 }
 
 .stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
@@ -193,6 +194,7 @@ button:disabled { cursor: default; }
 .hold .brick { width: 36px; height: 28px; font-size: 16px; }
 
 .well {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -530,9 +532,65 @@ button.action {
 
 .row.drop { animation: lock 160ms steps(3, end); }
 .row.reveal .brick, .row.win .brick { animation: clear 420ms steps(3, end); }
+.row.solved { animation: row-shake 420ms steps(4, end) both; }
 .brick.pulse { animation: blink 1s steps(2, end) infinite; }
 .code-row.shake { animation: shake 180ms steps(2, end); }
 .code-row.copied .brick { filter: invert(1); }
+
+.verdict {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.verdict-word {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 48px;
+  line-height: 1;
+  background: var(--stamp);
+  color: #000;
+  box-shadow: inset 1px 1px 0 var(--hi-paper), inset -1px -1px 0 var(--lo-paper);
+}
+
+.verdict-win .verdict-word { animation: win-pop 420ms steps(3, end) both; }
+
+.verdict-lose .verdict-word {
+  background: #f00000;
+  color: #fff;
+  box-shadow: inset 1px 1px 0 #ff8080, inset -1px -1px 0 #800000;
+  animation:
+    row-shake 760ms steps(5, end) both,
+    lose-in 760ms steps(5, end) both;
+}
+
+.cabinet.is-lose .well { animation: lose-frame 760ms steps(4, end) both; }
+
+.cabinet.is-lose .well-face,
+.cabinet.is-lose .hold,
+.cabinet.is-lose .side { animation: lose-dim 760ms steps(4, end) both; }
+
+.cabinet.is-done.is-notes .dock { display: block; }
+
+.confetti {
+  position: absolute;
+  inset: 0;
+}
+
+.confetti span {
+  position: absolute;
+  top: -12px;
+  width: 18px;
+  height: 18px;
+  box-shadow: inset 1px 1px 0 rgb(255 255 255 / 0.7), inset -1px -1px 0 rgb(0 0 0 / 0.45);
+  animation: confetti-fall 1500ms steps(8, end) both;
+}
 
 @keyframes lock {
   from { transform: translateY(-24px); }
@@ -557,6 +615,44 @@ button.action {
 
 @keyframes screen-fall {
   from { transform: translateY(-16px); }
+}
+
+@keyframes win-pop {
+  0% { transform: translateY(-20px); }
+  66% { transform: translateY(4px); }
+  100% { transform: none; }
+}
+
+@keyframes row-shake {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-16px); }
+  40% { transform: translateX(16px); }
+  60% { transform: translateX(-10px); }
+  80% { transform: translateX(6px); }
+}
+
+@keyframes lose-in {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  40% { opacity: 0.25; }
+  70% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+@keyframes lose-dim {
+  0%, 100% { opacity: 1; }
+  40% { opacity: 0.28; }
+}
+
+@keyframes lose-frame {
+  0%, 100% { border-color: var(--frame); }
+  30%, 60% { border-color: #f00000; }
+}
+
+@keyframes confetti-fall {
+  0% { transform: translateY(-18px); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateY(68vh); opacity: 0; }
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
@@ -602,6 +698,7 @@ button.action {
 
   .pad { grid-template-columns: repeat(12, minmax(0, 1fr)); }
   .pad .brick-btn, button.action { min-height: 44px; font-size: 22px; }
+  .verdict-word { font-size: 36px; }
   .brick.tiny { height: 24px; font-size: 12px; }
   .marquee { font-size: 36px; }
 }
@@ -615,6 +712,7 @@ button.action {
   .row.drop,
   .row.reveal .brick,
   .row.win .brick,
+  .row.solved,
   .brick.pulse,
   .lamp.on,
   .code-row.shake,
@@ -622,7 +720,16 @@ button.action {
   .lamps,
   .well-face,
   .dock-face,
-  .cabinet.is-notes .side { animation: none; }
+  .cabinet.is-notes .side,
+  .verdict-win .verdict-word,
+  .verdict-lose .verdict-word,
+  .cabinet.is-lose .well,
+  .cabinet.is-lose .well-face,
+  .cabinet.is-lose .hold,
+  .cabinet.is-lose .side,
+  .confetti span { animation: none; }
+
+  .confetti { display: none; }
 
   button.brick { transition-property: filter; }
 

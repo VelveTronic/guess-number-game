@@ -1,8 +1,8 @@
 'use client'
 
-export type Mark = 'out' | 'pin'
+import { inkOf } from './bricks'
 
-const LIGHT = new Set(['1', '5', '6', '8'])
+export type Mark = 'out' | 'pin'
 
 export function NoteGrid({
   length,
@@ -27,7 +27,7 @@ export function NoteGrid({
                 type="button"
                 data-pos={pos}
                 data-digit={label}
-                className={`brick tiny ${pinned ? `d${label} ${LIGHT.has(label) ? 'light' : 'dark'}` : 'hollow'} ${state === 'out' ? 'out' : ''}`}
+                className={`brick tiny ${pinned ? `d${label} ${inkOf(label)}` : 'hollow'} ${state === 'out' ? 'out' : ''}`}
                 onClick={() => onCycle(pos, label)}
               >
                 {label}
