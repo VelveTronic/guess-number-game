@@ -40,7 +40,19 @@ type Phase =
   | { name: 'room'; code: string }
 type Mode = 'play' | 'notes'
 type Screen = 'boot' | 'home' | 'join' | 'queue' | 'level' | 'wait' | 'done' | 'live'
-type TourStep = 'length' | 'time' | 'doors' | 'lock' | 'guess' | 'hit'
+type TourStep = 'length' | 'time' | 'room' | 'join' | 'match' | 'lock' | 'guess' | 'hit' | 'clock'
+
+const TOUR: Record<TourStep, { spot: string; dim: boolean; caption: string }> = {
+  length: { spot: 'length', dim: true, caption: '位数\n这局用几位' },
+  time: { spot: 'time', dim: true, caption: '秒数\n每手有多久' },
+  room: { spot: 'room', dim: true, caption: '开房\n开一间自己的房' },
+  join: { spot: 'join', dim: true, caption: '加入\n进别人的房' },
+  match: { spot: 'match', dim: true, caption: '匹配\n找一个人' },
+  lock: { spot: 'pad', dim: false, caption: '锁数\n先藏好自己的数' },
+  guess: { spot: 'pad', dim: false, caption: '出招\n轮流猜对方 你先\n全中就赢' },
+  hit: { spot: 'hit', dim: false, caption: '命中\n同一位对上几个' },
+  clock: { spot: 'clock', dim: false, caption: '秒到了换手\n这局还在' },
+}
 
 function screenOf(boot: boolean, phase: Phase['name'], status: View['status'] | undefined): Screen {
   if (boot) return 'boot'
@@ -300,8 +312,8 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   }, [view?.status, boardCode])
 
   useEffect(() => {
-    if (tour !== 'hit') return
-    const id = window.setTimeout(() => setTour(null), 1800)
+    if (tour !== 'hit' && tour !== 'clock') return
+    const id = window.setTimeout(() => setTour(tour === 'hit' ? 'clock' : null), 3200)
     return () => window.clearTimeout(id)
   }, [tour])
 
@@ -314,7 +326,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const canDrop = padOn && entry.length === size
 
   function pushDigit(digit: string) {
-    if (tour === 'hit') setTour(null)
+    if (tour === 'hit' || tour === 'clock') setTour(null)
     if (!padOn || entry.length >= size) return
     setEntry((current) => (current.length >= size ? current : current + digit))
   }
@@ -350,8 +362,10 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   }
 
   function door(kind: 'room' | 'join' | 'queue') {
-    if (tour === 'doors') {
-      beginSolo('easy', true)
+    if (tour === 'room' || tour === 'join' || tour === 'match') {
+      if (tour === 'room') setTour('join')
+      else if (tour === 'join') setTour('match')
+      else beginSolo('easy', true)
       return
     }
     if (kind === 'room') {
@@ -642,7 +656,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
                   aria-pressed={item === seconds}
                   onClick={() => {
                     setSeconds(item)
-                    if (tour === 'time') setTour('doors')
+                    if (tour === 'time') setTour('room')
                   }}
                 >
                   {item}
@@ -734,18 +748,16 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         <div key={`${screen}-${mode}`} className="dock-face">
         {screen === 'home' ? (
           <div className="actions">
-            <div data-spot="doors">
-              <div className="actions">
-                <BrickButton className="d0 dark action" disabled={busy} onClick={() => door('room')}>
-                  开房
-                </BrickButton>
-                <BrickButton className="d3 dark action" onClick={() => door('join')}>
-                  加入
-                </BrickButton>
-                <BrickButton className="d4 dark action" onClick={() => door('queue')}>
-                  匹配
-                </BrickButton>
-              </div>
+            <div className="actions">
+              <BrickButton className="d0 dark action" data-spot="room" disabled={busy} onClick={() => door('room')}>
+                开房
+              </BrickButton>
+              <BrickButton className="d3 dark action" data-spot="join" onClick={() => door('join')}>
+                加入
+              </BrickButton>
+              <BrickButton className="d4 dark action" data-spot="match" onClick={() => door('queue')}>
+                匹配
+              </BrickButton>
             </div>
             <div className="action-row">
               <BrickButton className="d2 action" onClick={() => setTour('length')}>
@@ -758,7 +770,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
                   setPhase({ name: 'level' })
                 }}
               >
-                对机
+                单机
               </BrickButton>
             </div>
           </div>
@@ -817,10 +829,11 @@ export function Game({ initialRoom }: { initialRoom: string }) {
       </div>
       {tour && (screen === 'home' || screen === 'live') ? (
         <Spotlight
-          spot={tour === 'lock' || tour === 'guess' ? 'pad' : tour === 'hit' ? 'hit' : tour}
-          dim={tour === 'length' || tour === 'time' || tour === 'doors'}
+          spot={TOUR[tour].spot}
+          dim={TOUR[tour].dim}
+          caption={TOUR[tour].caption}
           onDim={() => setTour(null)}
-          onHole={tour === 'hit' ? () => setTour(null) : undefined}
+          onHole={tour === 'hit' ? () => setTour('clock') : tour === 'clock' ? () => setTour(null) : undefined}
         />
       ) : null}
     </main>
@@ -864,7 +877,11 @@ function Clock({ leftMs }: { leftMs: number | null }) {
   }, [leftMs])
   if (leftMs == null) return null
   const secs = Math.max(0, Math.ceil(left / 1000))
-  return <span className={`brick clock ${secs <= 10 ? 'd5 light' : ''}`}>{secs}</span>
+  return (
+    <span className={`brick clock ${secs <= 10 ? 'd5 light' : ''}`} data-spot="clock">
+      {secs}
+    </span>
+  )
 }
 
 function OppLine({ view }: { view: View }) {

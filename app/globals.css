@@ -528,6 +528,23 @@ button.action {
   50% { box-shadow: inset 0 0 0 4px #f0e000; }
 }
 
+.spot-cap {
+  position: fixed;
+  z-index: 1;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #000;
+  color: var(--stamp);
+  border: 4px solid #fff;
+  font-size: 20px;
+  line-height: 1.25;
+  text-align: center;
+  pointer-events: none;
+}
+
 .pad { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .pad .brick-btn, .code-pad .brick-btn { min-height: 48px; }
