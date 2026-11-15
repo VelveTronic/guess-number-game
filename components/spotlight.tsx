@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react'
 type Box = { top: number; left: number; width: number; height: number }
 type Cap = { top: number; left: number; width: number }
 
+const DIGIT_CELLS = '.row.live, .hold, .history .row, .opp-line .row, .row.target, .lengths, .time-row'
+
 export function Spotlight({
   spot,
   dim,
@@ -53,17 +55,45 @@ export function Spotlight({
   useEffect(() => {
     if (!box) return
     const place = () => {
-      const height = capRef.current?.offsetHeight ?? 72
-      const width = Math.min(336, window.innerWidth - 16)
-      const below = box.top + box.height + 10
-      const above = box.top - height - 10
-      const mid = box.top + box.height / 2
-      let top = mid > window.innerHeight * 0.5 ? above : below
-      if (top < 8) top = below
-      if (top + height > window.innerHeight - 8) top = Math.max(8, above)
-      let left = box.left + box.width / 2 - width / 2
-      left = Math.max(8, Math.min(left, window.innerWidth - width - 8))
-      setCap({ top, left, width })
+      const node = capRef.current
+      if (!node) return
+      const well = document.querySelector('.well')?.getBoundingClientRect()
+      const host = well && well.width > 120 ? well : { left: 8, width: window.innerWidth - 16 }
+      const width = Math.min(336, Math.max(160, host.width - 16))
+      node.style.width = `${width}px`
+      const height = node.offsetHeight || 72
+      const left = Math.max(8, Math.min(host.left + (host.width - width) / 2, window.innerWidth - width - 8))
+      const gap = 8
+      const blocks = [...document.querySelectorAll<HTMLElement>(DIGIT_CELLS)]
+        .map((cell) => cell.getBoundingClientRect())
+        .filter((rect) => rect.width > 1 && rect.height > 1)
+        .map((rect) => ({
+          left: rect.left - gap,
+          right: rect.right + gap,
+          top: rect.top - gap,
+          bottom: rect.bottom + gap,
+        }))
+      blocks.push({
+        left: box.left - gap,
+        right: box.left + box.width + gap,
+        top: box.top - gap,
+        bottom: box.top + box.height + gap,
+      })
+      let best: Cap | null = null
+      let bestDist = Number.POSITIVE_INFINITY
+      for (let top = 8; top + height <= window.innerHeight - 8; top += 4) {
+        const rect = { left, right: left + width, top, bottom: top + height }
+        const blocked = blocks.some(
+          (block) => rect.left < block.right && rect.right > block.left && rect.top < block.bottom && rect.bottom > block.top,
+        )
+        if (blocked) continue
+        const dist = rect.bottom <= box.top ? box.top - rect.bottom : rect.top >= box.top + box.height ? rect.top - (box.top + box.height) : 0
+        if (dist < bestDist) {
+          bestDist = dist
+          best = { top, left, width }
+        }
+      }
+      if (best) setCap(best)
     }
     place()
   }, [box, caption])
