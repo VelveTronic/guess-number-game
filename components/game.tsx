@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { CODE_ROWS, normalizeCode } from '@/lib/code'
+import type { Level } from '@/lib/cpu'
+import { outcomeOf } from '@/lib/outcome'
+import { createSolo, type Solo } from '@/lib/solo'
 import type { DigitLength, TurnSeconds, View } from '@/lib/types'
 import { ApiError, api } from './api'
 import { Brick, BrickButton } from './bricks'
@@ -9,6 +12,8 @@ import { BackIcon, ClockIcon, ShareIcon } from './icons'
 import { NoteGrid, type Mark } from './notes'
 import { Numpad } from './numpad'
 import { getPlayerId } from './player'
+import { Spotlight } from './spotlight'
+import { Verdict } from './verdict'
 
 const WORDS: Record<string, string> = {
   not_found: '没有',
@@ -26,8 +31,39 @@ const LENGTHS: DigitLength[] = [3, 4, 5, 6]
 const TIMES: TurnSeconds[] = [30, 45, 60, 90]
 const LENGTH_TONE = ['', '', '', 'd0 dark', 'd3 dark', 'd4 dark', 'd5 light']
 
-type Phase = { name: 'home' } | { name: 'join'; code: string } | { name: 'queue' } | { name: 'room'; code: string }
+type Phase =
+  | { name: 'home' }
+  | { name: 'join'; code: string }
+  | { name: 'queue' }
+  | { name: 'level' }
+  | { name: 'solo' }
+  | { name: 'room'; code: string }
 type Mode = 'play' | 'notes'
+type Screen = 'boot' | 'home' | 'join' | 'queue' | 'level' | 'wait' | 'done' | 'live'
+type TourStep = 'length' | 'time' | 'room' | 'join' | 'match' | 'lock' | 'guess' | 'hit' | 'clock'
+
+const TOUR: Record<TourStep, { spot: string; dim: boolean; caption: string }> = {
+  length: { spot: 'length', dim: true, caption: '位数\n这局用几位' },
+  time: { spot: 'time', dim: true, caption: '秒数\n每手有多久' },
+  room: { spot: 'room', dim: true, caption: '开房\n开一间自己的房' },
+  join: { spot: 'join', dim: true, caption: '加入\n进别人的房' },
+  match: { spot: 'match', dim: true, caption: '匹配\n找一个人' },
+  lock: { spot: 'pad', dim: false, caption: '锁数\n先藏好自己的数' },
+  guess: { spot: 'pad', dim: false, caption: '出招\n轮流猜对方 你先\n全中就赢' },
+  hit: { spot: 'hit', dim: false, caption: '命中\n同一位对上几个' },
+  clock: { spot: 'clock', dim: false, caption: '秒到了换手\n这局还在' },
+}
+
+function screenOf(boot: boolean, phase: Phase['name'], status: View['status'] | undefined): Screen {
+  if (boot) return 'boot'
+  if (phase === 'home') return 'home'
+  if (phase === 'join') return 'join'
+  if (phase === 'queue') return 'queue'
+  if (phase === 'level') return 'level'
+  if (status === 'waiting') return 'wait'
+  if (status === 'done') return 'done'
+  return 'live'
+}
 
 function wordOf(error: unknown) {
   if (!(error instanceof ApiError) || error.status >= 500 || error.status === 0) return '断'
@@ -67,14 +103,21 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const [marks, setMarks] = useState<Record<string, Mark>>({})
   const [notesFor, setNotesFor] = useState('')
   const [fresh, setFresh] = useState(false)
+  const [tour, setTour] = useState<TourStep | null>(null)
+  const [soloId, setSoloId] = useState('')
   const seenGuesses = useRef(-1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevStatus = useRef<View['status'] | null>(null)
   const queueCancel = useRef(false)
   const submittedCode = useRef('')
   const flashTimer = useRef(0)
+  const soloRef = useRef<Solo | null>(null)
+  const onKey = useRef<(event: KeyboardEvent) => void>(() => {})
+
+  useEffect(() => () => window.clearTimeout(flashTimer.current), [])
 
   const roomCode = phase.name === 'room' ? phase.code : ''
+  const boardCode = phase.name === 'solo' ? soloId : roomCode
 
   function show(word: string) {
     setFlash(word)
@@ -178,6 +221,20 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   }, [roomCode])
 
   useEffect(() => {
+    if (phase.name !== 'solo') return
+    const id = window.setInterval(() => {
+      const game = soloRef.current
+      if (!game) return
+      try {
+        take(game.tick(Date.now()))
+      } catch {
+        /* a stale local board just stays where it is */
+      }
+    }, 200)
+    return () => window.clearInterval(id)
+  }, [phase.name])
+
+  useEffect(() => {
     if (phase.name !== 'queue') return
     queueCancel.current = false
     let stop = false
@@ -216,16 +273,16 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   }, [view?.guesses.length, view?.code])
 
   useEffect(() => {
-    if (view?.code !== roomCode) seenGuesses.current = -1
-  }, [roomCode, view?.code])
+    if (view?.code !== boardCode) seenGuesses.current = -1
+  }, [boardCode, view?.code])
 
   useEffect(() => {
-    if (!roomCode) return
-    const key = `guess-notes:${roomCode}:${getPlayerId()}`
+    if (!boardCode) return
+    const key = `guess-notes:${boardCode}:${getPlayerId()}`
     const raw = localStorage.getItem(key)
     if (!raw) {
       setMarks({})
-      setNotesFor(roomCode)
+      setNotesFor(boardCode)
       return
     }
     try {
@@ -234,24 +291,31 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     } catch {
       setMarks({})
     }
-    setNotesFor(roomCode)
-  }, [roomCode])
+    setNotesFor(boardCode)
+  }, [boardCode])
 
   useEffect(() => {
-    if (!roomCode || notesFor !== roomCode) return
-    localStorage.setItem(`guess-notes:${roomCode}:${getPlayerId()}`, JSON.stringify(marks))
-  }, [marks, notesFor, roomCode])
+    if (!boardCode || notesFor !== boardCode) return
+    localStorage.setItem(`guess-notes:${boardCode}:${getPlayerId()}`, JSON.stringify(marks))
+  }, [marks, notesFor, boardCode])
 
   useEffect(() => {
     const status = view?.status ?? null
-    if (prevStatus.current === 'done' && status === 'locking' && roomCode) {
-      localStorage.removeItem(`guess-notes:${roomCode}:${getPlayerId()}`)
+    if (prevStatus.current && prevStatus.current !== 'done' && status === 'done') setMode('play')
+    if (prevStatus.current === 'done' && status === 'locking' && boardCode) {
+      localStorage.removeItem(`guess-notes:${boardCode}:${getPlayerId()}`)
       setMarks({})
       setEntry('')
       setMode('play')
     }
     prevStatus.current = status
-  }, [view?.status, roomCode])
+  }, [view?.status, boardCode])
+
+  useEffect(() => {
+    if (tour !== 'hit' && tour !== 'clock') return
+    const id = window.setTimeout(() => setTour(tour === 'hit' ? 'clock' : null), 3200)
+    return () => window.clearTimeout(id)
+  }, [tour])
 
   const padOn = Boolean(
     view &&
@@ -262,6 +326,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const canDrop = padOn && entry.length === size
 
   function pushDigit(digit: string) {
+    if (tour === 'hit' || tour === 'clock') setTour(null)
     if (!padOn || entry.length >= size) return
     setEntry((current) => (current.length >= size ? current : current + digit))
   }
@@ -271,8 +336,69 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     setEntry((current) => current.slice(0, -1))
   }
 
+  function advanceTour(next: View) {
+    setTour((step) => {
+      if (step === 'lock' && next.youLocked) return 'guess'
+      if (step === 'guess' && next.guesses.length > 0) return next.status === 'done' ? null : 'hit'
+      return step
+    })
+  }
+
+  function beginSolo(level: Level, practice: boolean) {
+    const game = createSolo({
+      level,
+      digitLength: length,
+      turnSeconds: seconds,
+      playerId: getPlayerId(),
+    })
+    soloRef.current = game
+    setSoloId(game.code)
+    setPhase({ name: 'solo' })
+    setView(game.view(Date.now()))
+    setEntry('')
+    setMode('play')
+    setTour(practice ? 'lock' : null)
+    history.replaceState(null, '', '/')
+  }
+
+  function door(kind: 'room' | 'join' | 'queue') {
+    if (tour === 'room' || tour === 'join' || tour === 'match') {
+      if (tour === 'room') setTour('join')
+      else if (tour === 'join') setTour('match')
+      else beginSolo('easy', true)
+      return
+    }
+    if (kind === 'room') {
+      void createRoom()
+      return
+    }
+    if (kind === 'join') {
+      setPhase({ name: 'join', code: '' })
+      return
+    }
+    queueCancel.current = false
+    setPhase({ name: 'queue' })
+  }
+
   async function commit() {
-    if (!canDrop || !view || phase.name !== 'room') return
+    if (!canDrop || !view) return
+    if (phase.name === 'solo') {
+      const game = soloRef.current
+      if (!game) return
+      const payload = entry
+      const result = view.status === 'locking' ? game.lock(payload, Date.now()) : game.guess(payload, Date.now())
+      if (!result.ok) {
+        show(WORDS[result.error] ?? '断')
+        blip(110)
+        return
+      }
+      take(result.view)
+      setEntry('')
+      blip(result.view.status === 'done' ? 660 : 440)
+      advanceTour(result.view)
+      return
+    }
+    if (phase.name !== 'room') return
     const payload = entry
     setBusy(true)
     try {
@@ -290,40 +416,45 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     }
   }
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (phase.name === 'join') {
-        if (event.key === 'Backspace') {
-          event.preventDefault()
-          setPhase((current) => (current.name === 'join' ? { name: 'join', code: current.code.slice(0, -1) } : current))
-        }
-        const ch = event.key.toUpperCase()
-        if (ch.length === 1 && CODE_ROWS.join('').includes(ch)) {
-          event.preventDefault()
-          typeCode(ch)
-        }
-        return
+  onKey.current = (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (phase.name === 'join') {
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        setPhase((current) => (current.name === 'join' ? { name: 'join', code: current.code.slice(0, -1) } : current))
       }
-      if (!padOn) return
-      if (event.key >= '0' && event.key <= '9') {
+      const ch = event.key.toUpperCase()
+      if (ch.length === 1 && CODE_ROWS.join('').includes(ch)) {
         event.preventDefault()
-        pushDigit(event.key)
-      } else if (event.key === 'Backspace') {
-        event.preventDefault()
-        backspace()
-      } else if (event.key === 'Enter') {
-        event.preventDefault()
-        void commit()
+        typeCode(ch)
       }
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+    if (!padOn) return
+    if (event.key >= '0' && event.key <= '9') {
+      event.preventDefault()
+      pushDigit(event.key)
+    } else if (event.key === 'Backspace') {
+      event.preventDefault()
+      backspace()
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      void commit()
+    }
+  }
+
+  useEffect(() => {
+    const listen = (event: KeyboardEvent) => onKey.current(event)
+    window.addEventListener('keydown', listen)
+    return () => window.removeEventListener('keydown', listen)
+  }, [])
 
   function home() {
     queueCancel.current = true
     if (phase.name === 'queue') void api('/api/match', { method: 'DELETE' }).catch(() => undefined)
+    soloRef.current = null
+    setSoloId('')
+    setTour(null)
     setPhase({ name: 'home' })
     setView(null)
     setEntry('')
@@ -387,7 +518,22 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   }
 
   async function again() {
-    if (phase.name !== 'room' || busy) return
+    if (busy) return
+    if (phase.name === 'solo') {
+      const game = soloRef.current
+      if (!game) return
+      const result = game.rematch(Date.now())
+      if (!result.ok) {
+        show(WORDS[result.error] ?? '断')
+        return
+      }
+      take(result.view)
+      setEntry('')
+      setMode('play')
+      setTour(null)
+      return
+    }
+    if (phase.name !== 'room') return
     setBusy(true)
     try {
       take(await api<View>(`/api/rooms/${phase.code}/rematch`, { method: 'POST' }))
@@ -416,8 +562,8 @@ export function Game({ initialRoom }: { initialRoom: string }) {
     if (view?.status === 'playing' && view.turn !== view.seat) setEntry('')
   }, [view?.status, view?.turn, view?.seat])
 
-  const screen =
-    boot ? 'boot' : phase.name === 'home' ? 'home' : phase.name === 'join' ? 'join' : phase.name === 'queue' ? 'queue' : view?.status === 'waiting' ? 'wait' : view?.status === 'done' ? 'done' : 'live'
+  const screen = screenOf(boot, phase.name, view?.status)
+  const outcome = screen === 'done' && view ? outcomeOf(view.status, view.winner) : null
 
   useEffect(() => {
     const el = scrollRef.current
@@ -428,9 +574,14 @@ export function Game({ initialRoom }: { initialRoom: string }) {
   const showHold = Boolean(view && view.status !== 'waiting' && screen !== 'boot' && screen !== 'home' && screen !== 'join' && screen !== 'queue')
 
   return (
-    <main className={`cabinet is-${screen} ${mode === 'notes' ? 'is-notes' : 'is-play'} ${offline ? 'is-offline' : ''}`} data-screen={screen}>
+    <main
+      className={`cabinet is-${screen} ${mode === 'notes' ? 'is-notes' : 'is-play'} ${offline ? 'is-offline' : ''} ${outcome ? `is-${outcome}` : ''}`}
+      data-screen={screen}
+      data-outcome={outcome ?? 'none'}
+      data-tour={tour ?? 'none'}
+    >
       <header className="top">
-        {screen === 'home' || screen === 'boot' ? (
+        {screen === 'home' || screen === 'boot' || screen === 'level' ? (
           <h1 className="marquee">
             <span className="d0">猜</span>
             <span className="d3">数</span>
@@ -468,6 +619,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         ) : null}
 
         <section className="well" aria-busy={boot || busy}>
+          {outcome ? <Verdict outcome={outcome} /> : null}
           <div key={`${screen}-${mode}`} className="well-face">
           {flash ? (
             <p className="flash" role="alert">
@@ -477,14 +629,17 @@ export function Game({ initialRoom }: { initialRoom: string }) {
           {offline && !flash ? <p className="flash">断</p> : null}
           {screen === 'home' ? (
             <div className="home-pick">
-            <div className="lengths">
+            <div className="lengths" data-spot="length">
               {LENGTHS.map((item) => (
                 <BrickButton
                   key={item}
                   hollow={item !== length}
                   className={item === length ? LENGTH_TONE[item] : ''}
                   aria-pressed={item === length}
-                  onClick={() => setLength(item)}
+                  onClick={() => {
+                    setLength(item)
+                    if (tour === 'length') setTour('time')
+                  }}
                 >
                   {item}
                 </BrickButton>
@@ -492,20 +647,44 @@ export function Game({ initialRoom }: { initialRoom: string }) {
             </div>
             <div className="times">
               <ClockIcon />
-              <div className="time-row">
+              <div className="time-row" data-spot="time">
               {TIMES.map((item) => (
                 <BrickButton
                   key={item}
                   hollow={item !== seconds}
                   className={item === seconds ? 'd2 dark' : ''}
                   aria-pressed={item === seconds}
-                  onClick={() => setSeconds(item)}
+                  onClick={() => {
+                    setSeconds(item)
+                    if (tour === 'time') setTour('room')
+                  }}
                 >
                   {item}
                 </BrickButton>
               ))}
               </div>
             </div>
+            </div>
+          ) : null}
+          {screen === 'level' ? (
+            <div className="home-pick">
+              <div className="length-pips">
+                {Array.from({ length }, (_, index) => (
+                  <span key={index} className="brick d0 dark pip" />
+                ))}
+              </div>
+              <span className="brick clock d2">{seconds}</span>
+              <div className="levels">
+                <BrickButton className="d4 level" data-level="easy" onClick={() => beginSolo('easy', false)}>
+                  易
+                </BrickButton>
+                <BrickButton className="d3 level" data-level="mid" onClick={() => beginSolo('mid', false)}>
+                  中
+                </BrickButton>
+                <BrickButton className="d5 level" data-level="hard" onClick={() => beginSolo('hard', false)}>
+                  难
+                </BrickButton>
+              </div>
             </div>
           ) : null}
           {screen === 'wait' && view ? (
@@ -549,7 +728,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
               <Target view={view} />
               <div className="well-scroll" ref={scrollRef}>
                 <div className="scroll-pad" />
-                <History className="history-main" tagged guesses={view.guesses} fresh={fresh} />
+                <History className="history-main" tagged spot guesses={view.guesses} fresh={fresh} />
                 {(view.status === 'locking' && !view.youLocked) || (view.status === 'playing' && view.turn === view.seat) ? (
                   <LiveRow value={entry} length={view.digitLength} />
                 ) : null}
@@ -560,7 +739,7 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         </section>
 
         <aside className="side">
-          {view ? <History className="history-side" guesses={view.guesses} fresh={fresh} /> : null}
+          {view ? <History className="history-side" spot guesses={view.guesses} fresh={fresh} /> : null}
           {view ? <NoteGrid length={view.digitLength} marks={marks} onCycle={cycle} /> : null}
         </aside>
       </div>
@@ -569,21 +748,31 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         <div key={`${screen}-${mode}`} className="dock-face">
         {screen === 'home' ? (
           <div className="actions">
-            <BrickButton className="d0 dark action" disabled={busy} onClick={() => void createRoom()}>
-              开房
-            </BrickButton>
-            <BrickButton className="d3 dark action" onClick={() => setPhase({ name: 'join', code: '' })}>
-              加入
-            </BrickButton>
-            <BrickButton
-              className="d4 dark action"
-              onClick={() => {
-                queueCancel.current = false
-                setPhase({ name: 'queue' })
-              }}
-            >
-              匹配
-            </BrickButton>
+            <div className="actions">
+              <BrickButton className="d0 dark action" data-spot="room" disabled={busy} onClick={() => door('room')}>
+                开房
+              </BrickButton>
+              <BrickButton className="d3 dark action" data-spot="join" onClick={() => door('join')}>
+                加入
+              </BrickButton>
+              <BrickButton className="d4 dark action" data-spot="match" onClick={() => door('queue')}>
+                匹配
+              </BrickButton>
+            </div>
+            <div className="action-row">
+              <BrickButton className="d2 action" onClick={() => setTour('length')}>
+                学
+              </BrickButton>
+              <BrickButton
+                className="d6 action"
+                onClick={() => {
+                  setTour(null)
+                  setPhase({ name: 'level' })
+                }}
+              >
+                单机
+              </BrickButton>
+            </div>
           </div>
         ) : null}
         {screen === 'join' ? (
@@ -621,13 +810,15 @@ export function Game({ initialRoom }: { initialRoom: string }) {
             </BrickButton>
           </div>
         ) : null}
-        {screen === 'queue' ? (
+        {screen === 'queue' || screen === 'level' ? (
           <BrickButton hollow className="action" onClick={home}>
             撤
           </BrickButton>
         ) : null}
         {screen === 'live' && view ? (
-          <Numpad disabled={!padOn} canDrop={canDrop} onDigit={pushDigit} onBack={backspace} onDrop={() => void commit()} />
+          <div data-spot="pad">
+            <Numpad disabled={!padOn} canDrop={canDrop} onDigit={pushDigit} onBack={backspace} onDrop={() => void commit()} />
+          </div>
         ) : null}
         {screen === 'done' ? (
           <BrickButton className="d4 dark action" disabled={busy} onClick={() => void again()}>
@@ -636,6 +827,15 @@ export function Game({ initialRoom }: { initialRoom: string }) {
         ) : null}
         </div>
       </div>
+      {tour && (screen === 'home' || screen === 'live') ? (
+        <Spotlight
+          spot={TOUR[tour].spot}
+          dim={TOUR[tour].dim}
+          caption={TOUR[tour].caption}
+          onDim={() => setTour(null)}
+          onHole={tour === 'hit' ? () => setTour('clock') : tour === 'clock' ? () => setTour(null) : undefined}
+        />
+      ) : null}
     </main>
   )
 }
@@ -677,16 +877,21 @@ function Clock({ leftMs }: { leftMs: number | null }) {
   }, [leftMs])
   if (leftMs == null) return null
   const secs = Math.max(0, Math.ceil(left / 1000))
-  return <span className={`brick clock ${secs <= 10 ? 'd5 light' : ''}`}>{secs}</span>
+  return (
+    <span className={`brick clock ${secs <= 10 ? 'd5 light' : ''}`} data-spot="clock">
+      {secs}
+    </span>
+  )
 }
 
 function OppLine({ view }: { view: View }) {
   const opp = view.seat === '1' ? '2' : '1'
   const guess = view.oppGuess
+  const solved = Boolean(guess && view.status === 'done' && guess.hits === view.digitLength)
   return (
     <div className="opp-line">
       <span className={`brick seat-pip p${opp} here`}>{opp === '1' ? '1P' : '2P'}</span>
-      <div className="row with-hit" style={{ ['--n' as string]: view.digitLength }}>
+      <div className={`row with-hit ${solved ? 'solved' : ''}`} style={{ ['--n' as string]: view.digitLength }}>
         {Array.from({ length: view.digitLength }, (_, index) =>
           guess ? <Brick key={index} digit={guess.guess[index]} /> : <span key={index} className="brick hollow" />,
         )}
@@ -729,11 +934,13 @@ function History({
   guesses,
   fresh,
   tagged = false,
+  spot = false,
   className = '',
 }: {
   guesses: View['guesses']
   fresh: boolean
   tagged?: boolean
+  spot?: boolean
   className?: string
 }) {
   return (
@@ -747,7 +954,7 @@ function History({
           {row.guess.split('').map((digit, place) => (
             <Brick key={place} digit={digit} />
           ))}
-          <span className="brick hit" data-hits={tagged ? row.hits : undefined}>
+          <span className="brick hit" data-hits={tagged ? row.hits : undefined} data-spot={spot && index === guesses.length - 1 ? 'hit' : undefined}>
             {row.hits}
           </span>
         </div>

@@ -1,7 +1,7 @@
 'use client'
 
 import { BackIcon, DropIcon } from './icons'
-import { BrickButton, inkOf } from './bricks'
+import { BrickButton } from './bricks'
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
@@ -36,8 +36,4 @@ export function Numpad({
       </button>
     </div>
   )
-}
-
-export function inkClass(digit: string) {
-  return inkOf(digit)
 }
