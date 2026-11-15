@@ -173,6 +173,7 @@ button:disabled { cursor: default; }
 .cabinet.is-boot .stage,
 .cabinet.is-join .stage,
 .cabinet.is-queue .stage,
+.cabinet.is-level .stage,
 .cabinet.is-wait .stage {
   grid-template-columns: 1fr;
 }
@@ -213,6 +214,7 @@ button:disabled { cursor: default; }
 .cabinet.is-boot .well,
 .cabinet.is-join .well,
 .cabinet.is-queue .well,
+.cabinet.is-level .well,
 .cabinet.is-wait .well {
   align-items: center;
   justify-content: center;
@@ -485,6 +487,47 @@ button.action {
 
 .actions { grid-template-columns: 1fr; }
 
+.action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.action-row button.action {
+  min-height: 48px;
+  font-size: 28px;
+}
+
+.levels {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.levels button.brick {
+  width: 84px;
+  height: 84px;
+  font-size: 48px;
+}
+
+.spot { position: fixed; inset: 0; z-index: 8; pointer-events: none; }
+
+.spot-dim,
+.spot-pass { position: fixed; pointer-events: auto; }
+
+.spot-dim { background: rgb(0 0 0 / 0.62); }
+
+.spot-line {
+  position: fixed;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 4px #fff;
+  animation: spot-blink 1s steps(2) infinite;
+}
+
+@keyframes spot-blink {
+  50% { box-shadow: inset 0 0 0 4px #f0e000; }
+}
+
 .pad { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .pad .brick-btn, .code-pad .brick-btn { min-height: 48px; }
@@ -698,6 +741,13 @@ button.action {
 
   .pad { grid-template-columns: repeat(12, minmax(0, 1fr)); }
   .pad .brick-btn, button.action { min-height: 44px; font-size: 22px; }
+  .home-pick { gap: 8px; }
+  .lengths button.brick { width: 48px; min-height: 40px; height: 40px; font-size: 22px; }
+  .times { gap: 4px; }
+  .times .icon { width: 22px; height: 22px; }
+  .times button.brick { width: 52px; min-height: 36px; height: 36px; font-size: 18px; }
+  .action-row button.action { min-height: 36px; font-size: 20px; }
+  .levels button.brick { width: 64px; min-height: 56px; height: 56px; font-size: 32px; }
   .verdict-word { font-size: 36px; }
   .brick.tiny { height: 24px; font-size: 12px; }
   .marquee { font-size: 36px; }
@@ -723,6 +773,7 @@ button.action {
   .cabinet.is-notes .side,
   .verdict-win .verdict-word,
   .verdict-lose .verdict-word,
+  .spot-line,
   .cabinet.is-lose .well,
   .cabinet.is-lose .well-face,
   .cabinet.is-lose .hold,
